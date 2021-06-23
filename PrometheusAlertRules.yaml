@@ -1,0 +1,295 @@
+#apiVersion: v1
+#kind: Namespace
+#metadata:
+#  name: monitoring
+#---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  labels:
+    name: prometheus-rules
+  namespace: monitoring
+data:
+  alert.rules: |-
+    groups:
+      - name: Deployment
+        rules:
+        - alert: Deployment at 0 Replicas
+          annotations:
+            summary: Deployment {{$labels.deployment}} in {{$labels.namespace}} is currently having no pods running
+          expr: |
+            sum(kube_deployment_status_replicas{pod_template_hash=""}) by (deployment,namespace)  < 1
+          for: 1m
+
+      - name: Pods
+        rules:
+        - alert: Container restarted
+          annotations:
+            summary: Container named {{$labels.container}} in {{$labels.pod}} in {{$labels.namespace}} was restarted
+          expr: |
+            sum(increase(kube_pod_container_status_restarts_total{namespace!="kube-system",pod_template_hash=""}[1m])) by (pod,namespace,container) > 0
+          for: 5m
+
+        - alert: K8 System level Container Not Running in Namespace "kube-system"
+          annotations:
+            summary: Container named {{$labels.container}} in {{$labels.pod}} in {{$labels.namespace}} is not Running
+          expr: |
+               kube_pod_container_status_running{namespace="kube-system"} == 0
+          for: 5m
+
+        - alert: Nginx Ingress Controller Container Not Running in Namespace "ingress-nginx"
+          annotations:
+            summary: Container named {{$labels.container}} in {{$labels.pod}} in {{$labels.namespace}} is not Running
+          expr: |
+               kube_pod_container_status_running{namespace="ingress-nginx"} == 0
+          for: 5m
+
+        - alert: Application POD is in waiting state:CreateContainerConfigError
+          annotations:
+            summary: Container named {{$labels.container}} in {{$labels.pod}} in {{$labels.namespace}} is in CreateContainerConfigError state
+          expr: |
+            kube_pod_container_status_waiting_reason{reason="CreateContainerConfigError",namespace=~"application-ns|application-ns-ga"} > 0
+          for: 1m
+
+        - alert: Application POD is in waiting state:ErrImagePull
+          annotations:
+            summary: Container named {{$labels.container}} in {{$labels.pod}} in {{$labels.namespace}} is in ErrImagePull state
+          expr: |
+            kube_pod_container_status_waiting_reason{reason="ErrImagePull",namespace=~"application-ns|application-ns-ga"} > 0
+          for: 1m
+
+        - alert: Application POD is in waiting state:ImagePullBackOff
+          annotations:
+            summary: Container named {{$labels.container}} in {{$labels.pod}} in {{$labels.namespace}} is in ImagePullBackOff state
+          expr: |
+            kube_pod_container_status_waiting_reason{reason="ImagePullBackOff",namespace=~"application-ns|application-ns-ga"} > 0
+          for: 1m
+
+        - alert: Application POD is in waiting state:InvalidImageName
+          annotations:
+            summary: Container named {{$labels.container}} in {{$labels.pod}} in {{$labels.namespace}} is in InvalidImageName state
+          expr: |
+            kube_pod_container_status_waiting_reason{reason="InvalidImageName",namespace=~"application-ns|application-ns-ga"} > 0
+          for: 1m
+
+        - alert: Application POD is in waiting state:CreateContainer/Pending
+          annotations:
+            summary: Container named {{$labels.container}} in {{$labels.pod}} in {{$labels.namespace}} is in CreateContainer/Pending state
+          expr: |
+            sum by (namespace, pod) (kube_pod_status_phase{job="kube-state-metrics",phase=~"Pending|Unknown", namespace=~"application-ns-ga|application-ns"}) > 0
+          for: 5m
+
+        #- alert: Application POD is in Terminated state:Error/Evicted
+        #  annotations:
+        #    summary: Container named {{$labels.container}} in {{$labels.pod}} in {{$labels.namespace}} is in Error/Evicted state
+        #  expr: |
+        #    sum by (namespace, pod) (kube_pod_status_phase{job="kube-state-metrics",phase="Failed",namespace=~"application-ns-ga|application-ns"}) > 0
+        #  for: 1m
+
+      - name: PersistenceVolume
+        rules:
+        - alert: Kubernetes PersistentvolumeClaim is in Pending state
+          annotations:
+            summary: "Kubernetes PersistentVolumeClaim {{$labels.persistentvolumeclaim}}"
+          expr: |
+            kube_persistentvolumeclaim_status_phase{phase=~"Failed|Pending",job="kube-state-metrics",namespace=~"application-ns|application-ns-ga"} > 0
+          for: 5m
+
+        - alert: Kubernetes Persistentvolume is in Pending state
+          annotations:
+            summary: "Kubernetes PersistentVolume {{$labels.persistentvolume}} is in Pending state"
+          expr: |
+            kube_persistentvolume_status_phase{phase="Pending",job="kube-state-metrics",namespace=~"application-ns|application-ns-ga"} > 0
+          for: 5m
+
+        - alert: Kubernetes Persistentvolume is in Failed state
+          annotations:
+            summary: "Kubernetes PersistentVolume {{$labels.persistentvolume}} is in Failed state"
+          expr: |
+            kube_persistentvolume_status_phase{phase="Failed",job="kube-state-metrics",namespace=~"application-ns|application-ns-ga"} > 0
+          for: 5m
+
+      - name: Nodes
+        rules:
+        - alert: High Node Memory Usage
+          annotations:
+            summary: Node {{$labels.kubernetes_io_hostname}} has more than 80% memory used. Plan Capcity
+          expr: |
+            (sum (container_memory_working_set_bytes{id="/",container_name!="POD"}) by (kubernetes_io_hostname) / sum (machine_memory_bytes{}) by (kubernetes_io_hostname) * 100) > 80
+          for: 5m
+
+        - alert: High Node CPU Usage
+          annotations:
+            summary: Node {{$labels.kubernetes_io_hostname}} has more than 80% allocatable cpu used. Plan Capacity.
+          expr: |
+            (sum(rate(container_cpu_usage_seconds_total{id="/", container_name!="POD"}[1m])) by (kubernetes_io_hostname) / sum(machine_cpu_cores) by (kubernetes_io_hostname)  * 100) > 80
+          for: 5m
+
+        - alert: Kubernetes Node not Ready
+          annotations:
+            summary: "Kubernetes Node is in not ready (instance {{$labels.instance}}) state"
+          expr: |
+            kube_node_status_condition{condition="Ready",status="true"} == 0
+          for: 5m
+
+        - alert: MemoryPressure on Node
+          annotations:
+            summary: Node {{$labels.node}} has Memory pressure issue. Please check.
+          expr: |
+            kube_node_status_condition{condition="MemoryPressure", status="false"} == 0
+          for: 5m
+
+        - alert: DiskPressure on Node
+          annotations:
+            summary: Node {{$labels.node}} has DISK pressure issue. Please check.
+          expr: |
+            kube_node_status_condition{condition="DiskPressure", status="false"} == 0
+          for: 5m
+
+        - alert: PIDPressure on Node
+          annotations:
+            summary: Node {{$labels.node}} has PIDPressure issue. Please check.
+          expr: |
+            kube_node_status_condition{condition="PIDPressure", status="false"} == 0
+          for: 5m
+
+
+      - name: MySQL
+        rules:
+
+        - alert: MysqlDown
+          annotations:
+            summary: "MySQL down (instance {{ $labels.instance }})"
+            description: "MySQL instance is down on {{ $labels.instance }}\n  VALUE = {{ $value }}"
+          expr: |
+            mysql_up == 0
+          for: 5m
+
+        - alert: MysqlSlowQueries
+          annotations:
+            summary: "MySQL slow queries (instance {{ $labels.instance }})"
+          expr: |
+            mysql_global_status_slow_queries > 0
+          for: 5m
+
+        - alert: MysqlTooManyConnections
+          annotations:
+            summary: "MySQL too many connections (instance {{ $labels.instance }})"
+            description: "More than 80% of MySQL connections are in use on {{ $labels.instance }}\n  VALUE = {{ $value }}"
+          expr: |
+            avg by (instance) (max_over_time(mysql_global_status_threads_connected[5m])) / avg by (instance) (mysql_global_variables_max_connections) * 100 > 80
+          for: 5m
+
+
+        - alert: MysqlRestarted
+          annotations:
+            summary: "MySQL restarted (instance {{ $labels.instance }})"
+            description: "MySQL has just been restarted, less than one minute ago on {{ $labels.instance }}.\n  VALUE = {{ $value }}\n"
+          expr: |
+            mysql_global_status_uptime < 60
+          for: 5m
+
+
+      - name: ElasticSearch
+        rules:
+
+        - alert: ElasticsearchHeapUsageTooHigh
+          annotations:
+            summary: "Elasticsearch Heap Usage Too High (instance {{ $labels.cluster }})"
+            description: "The heap usage is over 90% for 5m\n  Heap usage VALUE is = {{ $value }}% \n"
+          expr: |
+            (elasticsearch_jvm_memory_used_bytes{area="heap"} / elasticsearch_jvm_memory_max_bytes{area="heap"}) * 100 > 90
+          for: 5m
+
+        - alert: ElasticsearchHeapUsageWarning
+          annotations:
+            summary: "Elasticsearch Heap Usage warning (instance {{ $labels.cluster }})"
+            description: "The heap usage is over 80% for 5m\n Heap usage VALUE is = {{ $value }}% \n"
+          expr: |
+            (elasticsearch_jvm_memory_used_bytes{area="heap"} / elasticsearch_jvm_memory_max_bytes{area="heap"}) * 100 > 80
+          for: 5m
+
+        - alert: ElasticsearchDiskSpaceLow
+          annotations:
+            summary: "Elasticsearch disk space low (instance {{ $labels.cluster }})"
+            description: "The disk usage is over 80%\n  there are only {{ $value }}% left, Please plan"
+          expr: |
+            elasticsearch_filesystem_data_available_bytes / elasticsearch_filesystem_data_size_bytes * 100 < 20
+          for: 5m
+
+        - alert: ElasticsearchDiskOutOfSpace
+          annotations:
+            summary: "Elasticsearch disk out of space (instance {{ $labels.cluster }})"
+            description: "The disk usage is over 90%\n there are only {{ $value }}% left \n"
+          expr: |
+            elasticsearch_filesystem_data_available_bytes / elasticsearch_filesystem_data_size_bytes * 100 < 10
+          for: 5m
+
+        - alert: ElasticsearchClusterRed
+          annotations:
+            summary: "Elasticsearch Cluster Red (instance {{ $labels.cluster }})"
+            description: "Elastic Cluster Red status\n  VALUE = {{ $value }}\n"
+          expr: |
+            elasticsearch_cluster_health_status{color="red"} == 1
+          for: 5m
+
+        - alert: ElasticsearchClusterYellow
+          annotations:
+            summary: "Elasticsearch Cluster Yellow (instance {{ $labels.cluster }})"
+          expr: |
+            elasticsearch_cluster_health_status{color="yellow"} == 1
+          for: 5m
+
+        - alert: ElasticsearchPendingTasks
+          annotations:
+            summary: "Elasticsearch pending tasks (instance {{ $labels.cluster }})"
+            description: "Number of pending tasks for 10 min. Cluster works slowly.\n  VALUE = {{ $value }}\n"
+          expr: |
+            elasticsearch_cluster_health_number_of_pending_tasks > 0
+          for: 5m
+
+      - name: PostGres
+        rules:
+
+        - alert: PostgresqlDown
+          annotations:
+            summary: "Postgresql down (instance {{ $labels.instance }})"
+            description: "Postgresql instance is down\n  VALUE = {{ $value }}\n"
+          expr: |
+            pg_up == 0
+          for: 5m
+
+        - alert: PostgresqlRestarted
+          annotations:
+            summary: "Postgresql restarted (instance {{ $labels.instance }})"
+            description: "Postgresql restarted\n  VALUE = {{ $value }}\n"
+          expr: |
+            time() - pg_postmaster_start_time_seconds < 60
+          for: 5m
+
+
+        - alert: PostgresqlTooManyConnections
+          annotations:
+            summary: "Postgresql too many connections (instance {{ $labels.instance }})"
+            description: "PostgreSQL instance has too many connections\n  VALUE = {{ $value }}\n"
+          expr: |
+            sum by (datname) (pg_stat_activity_count{datname!~"template.*|postgres"}) > pg_settings_max_connections * 0.9
+          for: 5m
+
+        - alert: PostgresqlTooManyLocksAcquired
+          annotations:
+            summary: "Postgresql too many locks acquired (instance {{ $labels.instance }})"
+            description: "Too many locks acquired on the database. If this alert happens frequently, we may need to increase the postgres setting max_locks_per_transaction.\n  VALUE = {{ $value }}\n"
+          expr: |
+           ((sum (pg_locks_count)) / (pg_settings_max_locks_per_transaction * pg_settings_max_connections)) > 0.20
+          for: 5m
+
+        - alert: PostgresqlExporterError
+          annotations:
+            summary: "Postgresql exporter error (instance {{ $labels.instance }})"
+            description: "Postgresql exporter is showing errors. A query may be buggy in query.yaml\n  VALUE = {{ $value }}\n"
+          expr: |
+            pg_exporter_last_scrape_error > 0
+          for: 5m
+
